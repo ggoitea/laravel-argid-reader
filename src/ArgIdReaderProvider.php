@@ -22,6 +22,7 @@ use Ggoitea\LaravelArgIdReader\Parsing\MrzTd1Parser;
 use Ggoitea\LaravelArgIdReader\Pipeline\BarcodeReadPipeline;
 use Ggoitea\LaravelArgIdReader\Pipeline\DniDataMerger;
 use Ggoitea\LaravelArgIdReader\Pipeline\DniReadPipeline;
+use Ggoitea\LaravelArgIdReader\Pipeline\DomicilioReadPipeline;
 use Ggoitea\LaravelArgIdReader\Pipeline\MrzReadPipeline;
 use Illuminate\Support\ServiceProvider;
 use Psr\Log\LoggerInterface;
@@ -56,7 +57,6 @@ class ArgIdReaderProvider extends ServiceProvider
                 preprocessor: $app->make(ImagePreprocessor::class),
                 parser: new MrzTd1Parser(),
                 logger: $logger,
-                domicilioParser: new DomicilioParser(),
                 minSide: 300,
                 maxPixels: 40_000_000,
                 pdfDpi: 300,
@@ -67,6 +67,20 @@ class ArgIdReaderProvider extends ServiceProvider
                 mrz: $mrzPipeline,
                 merger: new DniDataMerger(),
                 logger: $logger,
+            );
+        });
+
+        $this->app->singleton(DomicilioReadPipeline::class, function ($app) {
+            return new DomicilioReadPipeline(
+                documents: $app->make(DocumentResolver::class),
+                probe: $app->make(ImageProbe::class),
+                ocr: $app->make(OcrReader::class),
+                preprocessor: $app->make(ImagePreprocessor::class),
+                logger: $app->make(LoggerInterface::class),
+                parser: new DomicilioParser(),
+                minSide: 300,
+                maxPixels: 40_000_000,
+                pdfDpi: 300,
             );
         });
 

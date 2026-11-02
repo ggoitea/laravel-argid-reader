@@ -7,6 +7,7 @@ namespace Ggoitea\LaravelArgIdReader\Tests\Unit;
 use Ggoitea\LaravelArgIdReader\ArgIdReaderProvider;
 use Ggoitea\LaravelArgIdReader\Contracts\ReadPipeline;
 use Ggoitea\LaravelArgIdReader\Pipeline\DniReadPipeline;
+use Ggoitea\LaravelArgIdReader\Pipeline\DomicilioReadPipeline;
 use Orchestra\Testbench\TestCase;
 
 final class ArgIdReaderProviderTest extends TestCase
@@ -28,5 +29,13 @@ final class ArgIdReaderProviderTest extends TestCase
             DniReadPipeline::class,
             $this->app->make(ReadPipeline::class),
         );
+    }
+
+    public function test_it_registers_the_address_pipeline(): void
+    {
+        $reader = $this->app->make(DomicilioReadPipeline::class);
+
+        $this->assertInstanceOf(DomicilioReadPipeline::class, $reader);
+        $this->assertSame($reader, $this->app->make(DomicilioReadPipeline::class), 'debe ser singleton');
     }
 }

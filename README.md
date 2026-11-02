@@ -2,7 +2,7 @@
 
 [Español](README.es.md)
 
-Laravel package to read Argentine DNI cards from **front and back images or PDFs**. It extracts the data available on the document by combining **PDF417/QR barcode** reading with **TD1 MRZ OCR** on the back side, and also extracts the **address** printed on the card.
+Laravel package to read Argentine DNI cards from **front and back images or PDFs**. It extracts the data available on the document by combining **PDF417/QR barcode** reading with **TD1 MRZ OCR** on the back side. Extracting the **address** printed on the card is a separate, optional stage.
 
 The package returns a structured, immutable result and never resolves front/back conflicts silently.
 
@@ -11,7 +11,7 @@ The package returns a structured, immutable result and never resolves front/back
 - Reads JPG, JPEG, PNG, WebP and PDF files.
 - Supports a single 2-page PDF for both sides, or two separate files.
 - First tries the PDF417/QR barcodes (front and back).
-- Falls back to MRZ TD1 OCR + address extraction when required fields are missing.
+- Falls back to MRZ TD1 OCR when required fields are missing.
 - Validates MRZ check digits, DNI, trámite, sex and CUIL.
 - Merges barcode and MRZ data and reports conflicts.
 - Does not log personal data.
@@ -22,8 +22,10 @@ The package returns a structured, immutable result and never resolves front/back
 
 1. `DniReadPipeline` runs the barcode stage first.
 2. If `dni`, `tramite` and `sexo` were obtained, the result is returned.
-3. Otherwise, the MRZ stage reads the back side with Tesseract, using several rotations/enhancements, and extracts the address.
+3. Otherwise, the MRZ stage reads the back side with Tesseract, using several rotations/enhancements.
 4. `DniDataMerger` combines both sources. Differences in `dni`, `tramite` or `sexo` produce a `conflicto` result instead of picking a value silently.
+
+Barcode + MRZ is enough to validate identity (no address OCR at all). The address is kept out of the main read to cut execution time: if you need it, run `DomicilioReadPipeline` separately (see [Address](#address)).
 
 ## Requirements
 
@@ -279,7 +281,21 @@ The parser repairs common OCR confusions (`O/0`, `I/1`, `S/5`, etc.), validates 
 
 ### Address
 
-The package looks for a block starting at `DOMICILIO` and ending at `LUGAR DE NACIMIENTO` on the back side. It retries with different preprocessing to improve the scan.
+The main read (barcode + MRZ) does **not** extract the address: the TD1 MRZ does not carry that field, and address OCR adds up to 3 extra Tesseract passes. `DniData::domicilio` stays `null` unless you ask for it explicitly.
+
+The package looks for a block starting at `DOMICILIO` and ending at `LUGAR DE NACIMIENTO` on the back side. It retries with different preprocessing to improve the scan (up to 3 attempts, stopping at the first plausible result).
+
+This stage is optional and independent. Resolve it only when you need it, with the same images:
+
+```php
+use Ggoitea\LaravelArgIdReader\Pipeline\DomicilioReadPipeline;
+
+$address = app(DomicilioReadPipeline::class)->read($images);
+
+if ($address->status === ReadStatus::Completo) {
+    $domicilio = $address->data?->domicilio;
+}
+```
 
 ## Custom implementations
 

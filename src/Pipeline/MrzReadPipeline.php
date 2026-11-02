@@ -11,7 +11,6 @@ use Ggoitea\LaravelArgIdReader\Contracts\ReadPipeline;
 use Ggoitea\LaravelArgIdReader\Domain\DniData;
 use Ggoitea\LaravelArgIdReader\Domain\DniImages;
 use Ggoitea\LaravelArgIdReader\Domain\MrzData;
-use Ggoitea\LaravelArgIdReader\Domain\PreparedImage;
 use Ggoitea\LaravelArgIdReader\Domain\ReadReport;
 use Ggoitea\LaravelArgIdReader\Domain\ReadStatus;
 use Ggoitea\LaravelArgIdReader\Domain\StageReport;
@@ -19,13 +18,14 @@ use Ggoitea\LaravelArgIdReader\Domain\StageStatus;
 use Ggoitea\LaravelArgIdReader\Exceptions\DocumentoInvalido;
 use Ggoitea\LaravelArgIdReader\Infrastructure\DocumentResolver;
 use Ggoitea\LaravelArgIdReader\Infrastructure\ResolvedDocument;
-use Ggoitea\LaravelArgIdReader\Parsing\DomicilioParser;
 use Ggoitea\LaravelArgIdReader\Parsing\MrzTd1Parser;
 use Psr\Log\LoggerInterface;
 
 /**
  * Etapa 2: lectura de la MRZ TD1 del dorso con OCR y validación por dígitos
- * de control. No registra el texto OCR ni datos personales.
+ * de control. Solo identidad: el domicilio se lee aparte con
+ * {@see DomicilioReadPipeline} cuando es necesario. No registra el texto OCR
+ * ni datos personales.
  */
 class MrzReadPipeline implements ReadPipeline
 {
@@ -41,17 +41,6 @@ class MrzReadPipeline implements ReadPipeline
         ['enhance' => 'bottom', 'rotation' => 0, 'language' => 'eng', 'segmentation' => '3'],
     ];
 
-    /**
-     * enhance: null = imagen original, 0 = mejora completa, >0 = recorte superior.
-     *
-     * @var list<array{enhance:?int,language:string,segmentation:string}>
-     */
-    private const INTENTOS_DOMICILIO = [
-        ['enhance' => null, 'language' => 'spa', 'segmentation' => '3'],
-        ['enhance' => 0, 'language' => 'spa', 'segmentation' => '3'],
-        ['enhance' => 65, 'language' => 'spa', 'segmentation' => '3'],
-    ];
-
     public function __construct(
         private readonly DocumentResolver $documents,
         private readonly ImageProbe $probe,
@@ -59,7 +48,6 @@ class MrzReadPipeline implements ReadPipeline
         private readonly ImagePreprocessor $preprocessor,
         private readonly MrzTd1Parser $parser,
         private readonly LoggerInterface $logger,
-        private readonly DomicilioParser $domicilioParser = new DomicilioParser,
         private readonly int $minSide = 300,
         private readonly int $maxPixels = 40_000_000,
         private readonly int $pdfDpi = 300,
@@ -72,7 +60,6 @@ class MrzReadPipeline implements ReadPipeline
         $resolved = null;
         $prepared = [];
         $mrz = null;
-        $domicilio = null;
 
         try {
             $resolved = $this->resolverEtapa($stages, $images);
@@ -115,8 +102,6 @@ class MrzReadPipeline implements ReadPipeline
                     break;
                 }
             }
-
-            $domicilio = $this->domicilioEtapa($stages, $resolved->imagePath, $prepared);
         } finally {
             foreach ($prepared as $image) {
                 $image->cleanup();
@@ -124,16 +109,14 @@ class MrzReadPipeline implements ReadPipeline
             $resolved?->cleanup();
         }
 
-        if ($mrz === null && $domicilio === null) {
+        if ($mrz === null) {
             return $this->report(ReadStatus::SinDatos, null, $stages, $startedAt);
         }
 
-        $data = ($mrz?->toDniData() ?? new DniData)->withDomicilio($domicilio);
+        $data = $mrz->toDniData();
 
         return $this->report(
-            $mrz === null
-                ? ReadStatus::SinDatos
-                : ($data->hasRequiredFields() ? ReadStatus::Completo : ReadStatus::Parcial),
+            $data->hasRequiredFields() ? ReadStatus::Completo : ReadStatus::Parcial,
             $data,
             $stages,
             $startedAt,
@@ -300,75 +283,6 @@ class MrzReadPipeline implements ReadPipeline
         ]);
 
         return $mrz;
-    }
-
-    /**
-     * @param  list<StageReport>  $stages
-     * @param  list<PreparedImage>  $prepared
-     */
-    private function domicilioEtapa(array &$stages, string $path, array &$prepared): ?string
-    {
-        foreach (self::INTENTOS_DOMICILIO as $index => $intento) {
-            $startedAt = microtime(true);
-            $source = $path;
-
-            if ($intento['enhance'] !== null) {
-                try {
-                    $preparedImage = $this->preprocessor->enhanceAddress($path, $intento['enhance']);
-                    $prepared[] = $preparedImage;
-                    $source = $preparedImage->path;
-                } catch (DocumentoInvalido $e) {
-                    $stages[] = new StageReport('preproceso.domicilio', StageStatus::Error, microtime(true) - $startedAt, [
-                        'code' => $e->codigo,
-                        'attempt' => $index + 1,
-                    ]);
-
-                    continue;
-                }
-            }
-
-            try {
-                $texto = $this->ocr->read($source, $intento['language'], $intento['segmentation']);
-            } catch (\Throwable) {
-                $stages[] = new StageReport('ocr.domicilio', StageStatus::Error, microtime(true) - $startedAt, [
-                    'attempt' => $index + 1,
-                    'language' => $intento['language'],
-                ]);
-
-                continue;
-            }
-
-            if ($texto === null) {
-                $stages[] = new StageReport('ocr.domicilio', StageStatus::SinDatos, microtime(true) - $startedAt, [
-                    'attempt' => $index + 1,
-                    'language' => $intento['language'],
-                ]);
-
-                continue;
-            }
-
-            try {
-                $domicilio = $this->domicilioParser->parse($texto);
-            } catch (\Throwable) {
-                $domicilio = null;
-            }
-
-            if ($domicilio === null) {
-                $stages[] = new StageReport('parse.domicilio', StageStatus::SinDatos, microtime(true) - $startedAt, [
-                    'attempt' => $index + 1,
-                ]);
-
-                continue;
-            }
-
-            $stages[] = new StageReport('parse.domicilio', StageStatus::Ok, microtime(true) - $startedAt, [
-                'attempt' => $index + 1,
-            ]);
-
-            return $domicilio;
-        }
-
-        return null;
     }
 
     /**

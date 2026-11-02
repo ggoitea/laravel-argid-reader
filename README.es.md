@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-Paquete para Laravel que lee el **DNI argentino** a partir de imágenes o PDFs del **frente y dorso**. Extrae la información disponible combinando la lectura de **códigos de barras PDF417/QR** con **OCR de la MRZ TD1** del dorso, e incluye la extracción del **domicilio** impreso en la tarjeta.
+Paquete para Laravel que lee el **DNI argentino** a partir de imágenes o PDFs del **frente y dorso**. Extrae la información disponible combinando la lectura de **códigos de barras PDF417/QR** con **OCR de la MRZ TD1** del dorso. La extracción del **domicilio** impreso en la tarjeta es una etapa opcional e independiente.
 
 Devuelve un resultado estructurado e inmutable, y no resuelve conflictos entre frente y dorso de forma silenciosa.
 
@@ -11,7 +11,7 @@ Devuelve un resultado estructurado e inmutable, y no resuelve conflictos entre f
 - Lee archivos JPG, JPEG, PNG, WebP y PDF.
 - Soporta un único PDF de 2 páginas para ambas caras, o dos archivos separados.
 - Primero intenta los códigos de barras PDF417/QR (frente y dorso).
-- Si faltan campos obligatorios, recurre a la MRZ TD1 con OCR y extrae el domicilio.
+- Si faltan campos obligatorios, recurre a la MRZ TD1 con OCR.
 - Valida dígitos de control de la MRZ, DNI, trámite, sexo y CUIL.
 - Fusiona los datos de barcode y MRZ y reporta conflictos.
 - No registra datos personales en los logs.
@@ -22,8 +22,10 @@ Devuelve un resultado estructurado e inmutable, y no resuelve conflictos entre f
 
 1. `DniReadPipeline` ejecuta primero la etapa de códigos de barras.
 2. Si obtuvo `dni`, `tramite` y `sexo`, devuelve el resultado.
-3. Si no, la etapa MRZ lee el dorso con Tesseract, probando varias rotaciones y mejoras, y extrae el domicilio.
+3. Si no, la etapa MRZ lee el dorso con Tesseract, probando varias rotaciones y mejoras.
 4. `DniDataMerger` combina ambas fuentes. Si hay diferencias en `dni`, `tramite` o `sexo`, el resultado es `conflicto` en lugar de elegir un valor arbitrariamente.
+
+Con barcode + MRZ ya se valida la identidad (sin OCR de domicilio). El domicilio queda excluido de la lectura principal para reducir el tiempo de ejecución: si lo necesitás, ejecutá `DomicilioReadPipeline` aparte (ver [Domicilio](#domicilio)).
 
 ## Requisitos
 
@@ -279,7 +281,21 @@ El parser repara confusiones típicas de OCR (`O/0`, `I/1`, `S/5`, etc.), valida
 
 ### Domicilio
 
-El paquete busca un bloque que comience en `DOMICILIO` y termine en `LUGAR DE NACIMIENTO` en el dorso. Reintenta con distintos preprocesamientos para mejorar la lectura.
+La lectura principal (barcode + MRZ) **no** extrae el domicilio: la MRZ TD1 no incluye ese campo y el OCR de dirección tiene un costo adicional de hasta 3 pasadas de Tesseract. `DniData::domicilio` queda en `null` salvo que lo pidas explícitamente.
+
+El paquete busca un bloque que comience en `DOMICILIO` y termine en `LUGAR DE NACIMIENTO` en el dorso. Reintenta con distintos preprocesamientos para mejorar la lectura (máximo 3 intentos, cortando en el primero que encuentre un resultado plausible).
+
+Es una etapa optativa e independiente. Resolvela solo cuando la necesites con las mismas imágenes:
+
+```php
+use Ggoitea\LaravelArgIdReader\Pipeline\DomicilioReadPipeline;
+
+$domicilio = app(DomicilioReadPipeline::class)->read($images);
+
+if ($domicilio->status === ReadStatus::Completo) {
+    $direccion = $domicilio->data?->domicilio;
+}
+```
 
 ## Implementaciones personalizadas
 
